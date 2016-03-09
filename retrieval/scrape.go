@@ -65,6 +65,14 @@ var (
 		},
 		[]string{interval},
 	)
+	targetScrapeFailures = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "target_scrape_failures_total",
+			Help:      "Total number of scrapes that failed due to HTTP failure.",
+		},
+		[]string{interval},
+	)
 	targetReloadIntervalLength = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
 			Namespace:  namespace,
@@ -79,6 +87,7 @@ var (
 func init() {
 	prometheus.MustRegister(targetIntervalLength)
 	prometheus.MustRegister(targetSkippedScrapes)
+	prometheus.MustRegister(targetScrapeFailures)
 	prometheus.MustRegister(targetReloadIntervalLength)
 }
 
@@ -287,17 +296,26 @@ const acceptHeader = `application/vnd.google.protobuf;proto=io.prometheus.client
 func (s *targetScraper) scrape(ctx context.Context, ts time.Time) (model.Samples, error) {
 	req, err := http.NewRequest("GET", s.URL().String(), nil)
 	if err != nil {
+		if labelValue, ok := ctx.Value(interval).(string); ok {
+			targetScrapeFailures.WithLabelValues(labelValue).Inc()
+		}
 		return nil, err
 	}
 	req.Header.Add("Accept", acceptHeader)
 
 	resp, err := ctxhttp.Do(ctx, s.client, req)
 	if err != nil {
+		if labelValue, ok := ctx.Value(interval).(string); ok {
+			targetScrapeFailures.WithLabelValues(labelValue).Inc()
+		}
 		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		if labelValue, ok := ctx.Value(interval).(string); ok {
+			targetScrapeFailures.WithLabelValues(labelValue).Inc()
+		}
 		return nil, fmt.Errorf("server returned HTTP status %s", resp.Status)
 	}
 
@@ -380,8 +398,9 @@ func (sl *scrapeLoop) run(interval, timeout time.Duration, errc chan<- error) {
 
 		if !sl.appender.NeedsThrottling() {
 			var (
-				start        = time.Now()
-				scrapeCtx, _ = context.WithTimeout(sl.ctx, timeout)
+				start         = time.Now()
+				timeoutCtx, _ = context.WithTimeout(sl.ctx, timeout)
+				scrapeCtx     = context.WithValue(timeoutCtx, "interval", interval.String())
 			)
 
 			// Only record after the first scrape.
