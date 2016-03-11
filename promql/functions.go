@@ -19,6 +19,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"time"
 
 	"github.com/prometheus/common/model"
 
@@ -303,6 +304,112 @@ func funcHoltWinters(ev *evaluator, args Expressions) model.Value {
 		for i := 1; i < len(d); i++ {
 			s[i] = doubleSVal(i, sf, tf, s, b, d)
 		}
+
+		samples.Metric.Del(model.MetricNameLabel)
+		resultVector = append(resultVector, &sample{
+			Metric:    samples.Metric,
+			Value:     model.SampleValue(s[len(s)-1]), // the last value in the vector is the smoothed result
+			Timestamp: ev.Timestamp,
+		})
+	}
+
+	return resultVector
+}
+
+func funcHoltWintersPredict(ev *evaluator, args Expressions) model.Value {
+	mat := ev.evalMatrix(args[0])
+
+	// smoothing factor
+	sf := ev.evalFloat(args[1])
+
+	// trend factor
+	tf := ev.evalFloat(args[2])
+
+	// how far into the future to predict
+	predictDuration, err := parseDuration(ev.evalString(args[3]).String())
+	if err != nil {
+		ev.error(err)
+		return vector{}
+	}
+
+	predictUntil := ev.Timestamp.Add(predictDuration)
+
+	// sanity check input
+	if sf <= 0 || sf >= 1 {
+		ev.errorf("invalid smoothing factor. Expected: 0 < tf < 1 got: %f", sf)
+	}
+	if tf <= 0 || tf >= 1 {
+		ev.errorf("invalid trend factor. Expected: 0 < tf < 1 got: %f", sf)
+	}
+
+	// make an output vector large enough to hole the entire result
+	resultVector := vector{}
+
+	// create scratch values
+	var s, b, d []float64
+
+	var l int
+	for _, samples := range mat {
+		l = len(samples.Values)
+
+		// can't do the smoothing operation with less than two points
+		if l < 2 {
+			continue
+		}
+
+		// resize scratch values
+		if l != len(s) {
+			s = make([]float64, l)
+			b = make([]float64, l)
+			d = make([]float64, l)
+		}
+
+		// holt-winters is undefined for NaN
+		foundNaN := false
+
+		// how far to seperate predicted metrics
+		// the smallest space between metrics
+		var timeStep time.Duration
+
+		t := ev.Timestamp
+		// fill in the d values with the raw values from the input
+		for i, v := range samples.Values {
+			d[i] = float64(v.Value)
+
+			timestep = v.Timestamp.Sub(t)
+
+			// holt-winters is undefined for NaN
+			if math.IsNaN(d[i]) {
+				foundNaN = true
+				break
+			}
+		}
+
+		// skip to next because we found a NaN in the raw data set
+		if foundNaN {
+			continue
+		}
+
+		// NaN out scratch values, this use used to check for cached values
+		for i := range b {
+			b[i] = math.NaN()
+			s[i] = math.NaN()
+		}
+
+		// set initial values
+		s[0] = d[0]
+		b[0] = d[1] - d[0]
+
+		// run the smoothing operation
+		for i := 1; i < len(d); i++ {
+			s[i] = doubleSVal(i, sf, tf, s, b, d)
+		}
+
+		genMetric := func(i int) {
+
+		}
+
+		// fill out the
 
 		samples.Metric.Del(model.MetricNameLabel)
 		resultVector = append(resultVector, &sample{
