@@ -351,11 +351,11 @@ func funcHoltWintersPredict(ev *evaluator, args Expressions) model.Value {
 		// Set initial values.
 		s[0] = d[0]
 
-		var b0 float64
+		var initialSmoothingValue float64
 		for i := 0; i < seasonSize; i++ {
-			b0 += (d[i+1] - d[i]) / float64(seasonSize)
+			initialSmoothingValue += (d[i+1] - d[i]) / float64(seasonSize)
 		}
-		b[0] = (1 / float64(seasonSize)) * b0
+		b[0] = (1 / float64(seasonSize)) * initialSmoothingValue
 	}
 
 	return resultVector
