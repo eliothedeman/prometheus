@@ -280,6 +280,87 @@ func funcHoltWinters(ev *evaluator, args Expressions) model.Value {
 	return resultVector
 }
 
+func calcTripleSmoothValue(i, cycle int, sf, tf, cf float64, s, b, c, d []float64) float64 {
+	x := sf * (d[i] / c[i-cycle])
+	y := (1 - sf) * (s[i-1] + calcTripleTrendValue(i-1, cycle-1, sf, tf, cf, s, b, c, d))
+
+	return x + y
+}
+
+func calcTripleTrendValue(i, cycle int, sf, tf, cf float64, s, b, c, d []float64) float64 {
+	x := tf * (s[i] - s[i-1])
+	y := (1 - tf) * b[i-1]
+
+	return x + y
+}
+func funcHoltWintersPredict(ev *evaluator, args Expressions) model.Value {
+	mat := ev.evalMatrix(args[0])
+
+	// The smoothing factor argument.
+	sf := ev.evalFloat(args[1])
+
+	// The trend factor argument.
+	tf := ev.evalFloat(args[2])
+
+	// The Seasonal factor argument.
+	cf := ev.evalFloat(args[3])
+
+	// The number of datapoints per season.
+	seasonSize := ev.evalInt(args[4])
+
+	// Sanity check the input.
+	if sf <= 0 || sf >= 1 {
+		ev.errorf("invalid smoothing factor. Expected: 0 < sf < 1 got: %f", sf)
+	}
+	if tf <= 0 || tf >= 1 {
+		ev.errorf("invalid trend factor. Expected: 0 < tf < 1 got: %f", tf)
+	}
+	if cf <= 0 || cf >= 1 {
+		ev.errorf("invalid season factor. Expected: 0 < cf < 1 got: %f", cf)
+	}
+	if seasonSize < 0 {
+		ev.errorf("invalid season size. Expected: cf > 0 got: %d", seasonSize)
+	}
+
+	// Make an output vector large enough to hold the entire result.
+	resultVector := make(vector, 0, len(mat))
+
+	var s, b, c, d []float64
+
+	var l int
+	for _, m := range mat {
+		l = len(samples.Values)
+
+		// Can't do the smoothing operation with less than two points.
+		if l < 2 {
+			continue
+		}
+
+		// Resize scratch values.
+		if l != len(s) {
+			s = make([]float64, l)
+			b = make([]float64, l)
+			d = make([]float64, l)
+			c = make([]float64, l)
+		}
+
+		for i, v := range m.Values {
+			d[i] = v.Value.(float64)
+		}
+
+		// Set initial values.
+		s[0] = d[0]
+
+		var b0 float64
+		for i := 0; i < seasonSize; i++ {
+			b0 += (d[i+1] - d[i]) / float64(seasonSize)
+		}
+		b[0] = (1 / float64(seasonSize)) * b0
+	}
+
+	return resultVector
+}
+
 // === sort(node model.ValVector) Vector ===
 func funcSort(ev *evaluator, args Expressions) model.Value {
 	// NaN should sort to the bottom, so take descending sort with NaN first and
